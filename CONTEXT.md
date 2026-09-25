@@ -1,11 +1,13 @@
 # OcéEns
 
-Plateforme d'évaluation des enseignements de l'EPF : des sondages sont créés par filière, les étudiants y répondent, et les réponses sont exportées, visualisées et synthétisées.
+Teaching evaluation platform for EPF: surveys (*sondages*) are created per program, students answer them, and the answers are exported, visualized, and summarized (*synthèses*) via an LLM.
 
-## Langage
+## Language
 
-### Authentification
+This document, the README, the ADRs and other prose documentation are written in English. The product's own domain vocabulary stays in French where the application itself is French: *sondage* (survey), *synthèse* (summary/verbatim summary), and terms derived from them (e.g. *filière* for program). Use the French term when it names something the application shows to its French-speaking users; use English for everything else, including this glossary's own definitions.
 
-**Connexion de développement** (`AUTH_MODE=dev`) :
-Connexion sans fournisseur d'identité : on choisit l'adresse mail d'un utilisateur et on est connecté en tant que lui, sans preuve d'identité. Elle n'existe que lorsque `AUTH_MODE=dev` et ne doit jamais servir en production.
-_À éviter_ : impersonation, usurpation, fake login
+### Authentication
+
+**Development login** (`AUTH_MODE=dev`):
+Login without an identity provider: you pick a user's email address and are logged in as them, with no proof of identity. It only exists when `AUTH_MODE=dev` and must never be used in production.
+_Avoid_: impersonation, usurpation, fake login
