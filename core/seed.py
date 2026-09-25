@@ -63,6 +63,18 @@ ADDITIONAL_STUDENT_USERS = [
 ]
 
 
+# Utilisateurs avec exactement un rôle scopé chacun (#84) : sans eux, la
+# connexion de développement ne permet de se connecter qu'en tant qu'admin
+# cumulant un autre rôle (user 1, 6), jamais en simple facilitator,
+# program_manager ou campus_manager. Scopés sur MDAI5 / Montpellier
+# (survey_id 1) pour voir des données dès la connexion.
+SINGLE_ROLE_USERS = [
+    (23, "tony.stark@epfedu.fr"),    # facilitator:MDAI5 uniquement
+    (24, "bruce.wayne@epf.fr"),      # program_manager:MDAI5 uniquement
+    (25, "diana.prince@epfedu.fr"),  # campus_manager:Montpellier uniquement
+]
+
+
 # submission_id, user_id, created_at
 SEEDED_SUBMISSIONS = [
     (1, 1, "2026-06-30 16:24:04"),
@@ -119,6 +131,7 @@ def seed_users(session: Session):
         (7, "arnaud.jousset@epf.fr"),
         (8, "etienne.gibaud@epf.fr"),
         *ADDITIONAL_STUDENT_USERS,
+        *SINGLE_ROLE_USERS,
     ]
     for u_data in user_data:
         user = User(user_id=u_data[0], mail=u_data[1])
@@ -138,6 +151,9 @@ def seed_roles(session: Session):
         (6, "campus_manager:Montpellier"),
         (7, "admin"),
         (8, "admin"),
+        (23, "facilitator:MDAI5"),
+        (24, "program_manager:MDAI5"),
+        (25, "campus_manager:Montpellier"),
     ]
     for r_data in role_data:
         role = Role(user_id=r_data[0], role=r_data[1])
