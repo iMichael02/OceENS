@@ -69,7 +69,7 @@ A user can hold several roles, each with its own scope (program codes or campuse
 
 ### Prerequisites
 
-- Python 3.12
+- [`uv`](https://docs.astral.sh/uv/) — installs the pinned interpreter and dependencies for you, or Python 3.12 directly if running without `uv`
 - A configured `.env` file (see [Configuration](#configuration))
 
 ### Quickstart (fresh clone, no credentials)
@@ -107,11 +107,13 @@ LOCAL_DATABASE_DIR=/path/to/database
 **Development** — source mounted as a volume, for iterating without rebuilding the image:
 
 ```bash
-docker run -p 8000:8000 --env-file .env -v oceens_db:/app/database -v ./import:/app/import -v .:/app oceens:1.0 \
-  uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+docker run -p 8000:8000 --env-file .env -v oceens_db:/app/database -v ./src/oceens/import:/app/src/oceens/import -v .:/app -v /app/.venv oceens:1.0 \
+  uvicorn oceens.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 > The `Dockerfile`'s `CMD` does **not** include `--reload`. Bind-mounting the source with `-v .:/app` only enables live reload if you also override the container's command to add `--reload`, as above. For a production-style run of the same image, drop both the bind mount and `--reload`.
+>
+> `-v /app/.venv` is required alongside `-v .:/app`: without it, the bind-mounted checkout (which has no `.venv` — it's gitignored) would hide the `.venv` that `uv sync` built into the image at `/app/.venv` during the build, and `uvicorn` would no longer be on `PATH`. The anonymous volume keeps the image's own `.venv` in place underneath the bind-mounted source.
 
 > The SQLite database is persisted in the `oceens_db` Docker volume (`/app/database`).
 > The `.env` file is never copied into the image: it's passed via `--env-file` at launch.
@@ -125,41 +127,29 @@ docker run -p 8000:8000 --env-file .env -v oceens_db:/app/database -v ./import:/
    cd OceENS
    ```
 
-2. **Create and activate a virtual environment**
+2. **Install dependencies with [uv](https://docs.astral.sh/uv/)**
 
    ```bash
-   python3 -m venv .venv
-   .venv\Scripts\activate       # Windows
-   source .venv/bin/activate    # Linux / macOS
+   uv sync
    ```
 
-3. **Install dependencies**
+   `uv` creates `.venv` itself, using the interpreter pinned in `.python-version`, and installs the exact versions locked in `uv.lock`.
 
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-4. **Set up the database**
+3. **Set up the database**
    Create a `database/` folder and place `db_oceens.db` in it, or let `seed_all_if_necessary()` initialize an empty database on first startup.
 
-5. **Run the application**:
+4. **Run the application**:
 
    ```bash
-   fastapi dev
+   uv run oceens
    ```
 
-   Or directly with Uvicorn:
+   `oceens` is the console script declared in `pyproject.toml`; it wraps `uvicorn.run("oceens.main:app", ...)`. In production, `launch.sh` runs the application and the summaries daemon in separate `screen` sessions.
+
+5. **(Optional) Run the LLM summaries daemon**:
 
    ```bash
-   uvicorn main:app --host 0.0.0.0 --port 8000
-   ```
-
-   In production, `launch.sh` runs the application and the summaries daemon in separate `screen` sessions.
-
-6. **(Optional) Run the LLM summaries daemon**:
-
-   ```bash
-   python summaries_generator_daemon.py
+   uv run oceens-summaries-daemon
    ```
 
    This process loops, writes to the database, and contacts an external LLM service: only run it when needed.
@@ -169,7 +159,7 @@ docker run -p 8000:8000 --env-file .env -v oceens_db:/app/database -v ./import:/
    > shutdown). Use this in a Docker production deployment.
    > Note: `launch.sh` (no Docker) already manages the daemon in its own `screen` session.
 
-7. Open your browser at **http://localhost:8000**.
+6. Open your browser at **http://localhost:8000**.
 
 ---
 
@@ -292,7 +282,7 @@ at a system secret (`SECRET_KEY`, `ENTRA_CLIENT_SECRET`…).
    startup):
 
    ```bash
-   python summaries_generator_daemon.py
+   uv run oceens-summaries-daemon
    ```
 
 3. **Create the provider** in `/backend/providers` → *+ New provider*:
@@ -402,93 +392,102 @@ $0.00, which is not the same information as "unknown".
 
 ```
 OceENS/
-├── main.py                       # FastAPI app factory, middlewares and router assembly
-├── sondage_loader.py             # Load a full survey for export
-├── survey_loader_from_xlsx.py    # Import surveys from an Excel file
-├── summaries_generator_daemon.py # Asynchronous processing of LLM summaries (separate process)
+├── pyproject.toml                # Project metadata, dependencies, console scripts (oceens, oceens-summaries-daemon)
+├── uv.lock                       # Locked dependency versions (committed, installed with `uv sync`)
+├── .python-version               # Interpreter pinned for uv
 ├── launch.sh                     # Launch script (production, no Docker)
-├── requirements.txt              # Python dependencies
 ├── Dockerfile                    # Application Docker image
 ├── .dockerignore                 # Files excluded from the Docker build
 ├── .env                          # Environment variables (⚠️ not committed)
 ├── .gitignore                    # Files and folders ignored by Git
 │
-├── core/                         # Low-level access and security
-│   ├── auth.py                   #   Microsoft Entra ID authentication (login, logout, callback) and development login
-│   ├── database.py               #   SQLite engine and the SessionDep dependency
-│   ├── security.py               #   Roles, scopes, access control
-│   ├── dependencies.py           #   Shared Jinja templates and logger
-│   └── seed.py                   #   Initial data and program synchronization
-│
-├── models/                       # SQLModel schema, one file per table
-│   ├── __init__.py               #   Re-exports all classes (see its docstring)
-│   └── User.py, Survey.py, ...
-│
-├── routers/                      # Routes split by business domain
-│   ├── pages.py                  #   Home and per-role dashboards
-│   ├── surveys.py                #   Surveys: CRUD, status, export, visualization
-│   ├── students.py                #   Enrolling students in a survey
-│   ├── users.py                   #   User role management
-│   ├── summaries.py               #   Triggering LLM summaries
-│   ├── prompts.py                #   Prompt administration
-│   ├── survey_templates.py       #   Survey template administration
-│   ├── sections_questions.py     #   Section and question administration
-│   └── llm/                      #   LLM administration (unchanged URLs)
-│       ├── _access.py            #     Shared access control for the LLM screens
-│       ├── providers.py          #     LLM providers (CRUD + connection test)
-│       ├── prices.py             #     Per-model pricing table
-│       └── costs.py              #     Overall cost and per-survey cost
-│
 ├── database/                     # Folder holding the database (ignored by Git)
 │   └── db_oceens.db
-│
-├── services/                     # Business logic
-│   ├── helpers.py                # Navigation, stats, filters, sorting
-│   ├── visualisation_data.py     # Aggregations and visualization context
-│   ├── llm_client.py             # Multi-provider LLM client (ollama/openai/anthropic)
-│   ├── llm_costs.py              # Summary cost (measured tokens × pricing table)
-│   └── export_csv.py             # CSV export of the answers
 │
 ├── llm-utils/                    # LLM tools outside the application
 │   └── README.md                 # (cost tracking moved into the app, see above)
 │
-├── templates/                    # HTML templates (Jinja2)
-│   ├── index.html                     # Home / login page
-│   ├── dashboard/
-│   │   ├── admin.html
-│   │   ├── student.html
-│   │   ├── program_manager.html
-│   │   ├── facilitator.html
-│   │   ├── campus_manager.html
-│   │   ├── teachers-analytics.html       # Teacher satisfaction (campus_manager, program_manager)
-│   │   ├── survey.html                   # Answering a survey
-│   │   ├── survey_create.html            # Survey creation
-│   │   └── visualisation.html            # Answer visualization
-│   ├── backend/                       # Admin pages (admin only)
-│   │   ├── prompts.html               # LLM prompt list
-│   │   ├── prompt_form.html           # Shared create/edit form
-│   │   └── llm/                       # LLM screens (providers, prices, costs)
-│   │       ├── providers.html
-│   │       ├── provider_form.html
-│   │       ├── prices.html            # Editable pricing table
-│   │       └── costs.html             # Overall and per-survey cost
-│   └── template_parts/                # Fragments shared across dashboards
-│       ├── part_site_header.html
-│       ├── part_dashboard_navigation.html
-│       ├── part_theme_switcher.html
-│       └── ...
-│
-├── static/
-│   ├── css/                      # admin.css, student.css, program_manager.css, survey.css,
-│   │                              # survey_create.css, visualisation.css, prompt_form.css,
-│   │                              # llm_backend.css (LLM screens), theme.css, site_header.css,
-│   │                              # dashboard_navigation.css, responsive.css
-│   ├── js/
-│   │   └── survey.js
-│   └── img/
-│
-└── .venv/                         # Python virtual environment (not committed)
+└── src/
+    └── oceens/                   # Importable root package (`import oceens`)
+        ├── main.py                       # FastAPI app factory, middlewares and router assembly
+        ├── sondage_loader.py             # Load a full survey for export
+        ├── survey_loader_from_xlsx.py    # Import surveys from an Excel file
+        ├── summaries_generator_daemon.py # Asynchronous processing of LLM summaries (separate process)
+        │
+        ├── core/                         # Low-level access and security
+        │   ├── auth.py                   #   Microsoft Entra ID authentication (login, logout, callback) and development login
+        │   ├── database.py               #   SQLite engine and the SessionDep dependency
+        │   ├── security.py               #   Roles, scopes, access control
+        │   ├── dependencies.py           #   Shared Jinja templates and logger
+        │   └── seed.py                   #   Initial data and program synchronization
+        │
+        ├── models/                       # SQLModel schema, one file per table
+        │   ├── __init__.py               #   Re-exports all classes (see its docstring)
+        │   └── User.py, Survey.py, ...
+        │
+        ├── routers/                      # Routes split by business domain
+        │   ├── pages.py                  #   Home and per-role dashboards
+        │   ├── surveys.py                #   Surveys: CRUD, status, export, visualization
+        │   ├── students.py               #   Enrolling students in a survey
+        │   ├── users.py                  #   User role management
+        │   ├── summaries.py              #   Triggering LLM summaries
+        │   ├── prompts.py                #   Prompt administration
+        │   ├── survey_templates.py       #   Survey template administration
+        │   ├── sections_questions.py     #   Section and question administration
+        │   └── llm/                      #   LLM administration (unchanged URLs)
+        │       ├── _access.py            #     Shared access control for the LLM screens
+        │       ├── providers.py          #     LLM providers (CRUD + connection test)
+        │       ├── prices.py             #     Per-model pricing table
+        │       └── costs.py              #     Overall cost and per-survey cost
+        │
+        ├── services/                     # Business logic
+        │   ├── helpers.py                # Navigation, stats, filters, sorting
+        │   ├── visualisation_data.py     # Aggregations and visualization context
+        │   ├── llm_client.py             # Multi-provider LLM client (ollama/openai/anthropic)
+        │   ├── llm_costs.py              # Summary cost (measured tokens × pricing table)
+        │   └── export_csv.py             # CSV export of the answers
+        │
+        ├── import/                       # Seed source data (CSV), read by core/seed.py
+        │   ├── Program_list.csv
+        │   └── seed_answers*.csv
+        │
+        ├── templates/                    # HTML templates (Jinja2)
+        │   ├── index.html                     # Home / login page
+        │   ├── dashboard/
+        │   │   ├── admin.html
+        │   │   ├── student.html
+        │   │   ├── program_manager.html
+        │   │   ├── facilitator.html
+        │   │   ├── campus_manager.html
+        │   │   ├── teachers-analytics.html       # Teacher satisfaction (campus_manager, program_manager)
+        │   │   ├── survey.html                   # Answering a survey
+        │   │   ├── survey_create.html            # Survey creation
+        │   │   └── visualisation.html            # Answer visualization
+        │   ├── backend/                       # Admin pages (admin only)
+        │   │   ├── prompts.html               # LLM prompt list
+        │   │   ├── prompt_form.html           # Shared create/edit form
+        │   │   └── llm/                       # LLM screens (providers, prices, costs)
+        │   │       ├── providers.html
+        │   │       ├── provider_form.html
+        │   │       ├── prices.html            # Editable pricing table
+        │   │       └── costs.html             # Overall and per-survey cost
+        │   └── template_parts/                # Fragments shared across dashboards
+        │       ├── part_site_header.html
+        │       ├── part_dashboard_navigation.html
+        │       ├── part_theme_switcher.html
+        │       └── ...
+        │
+        └── static/
+            ├── css/                      # admin.css, student.css, program_manager.css, survey.css,
+            │                              # survey_create.css, visualisation.css, prompt_form.css,
+            │                              # llm_backend.css (LLM screens), theme.css, site_header.css,
+            │                              # dashboard_navigation.css, responsive.css
+            ├── js/
+            │   └── survey.js
+            └── img/
 ```
+
+`database/` stays at the repository root, outside the package: `core/database.py` resolves its default location from its own file path, four levels up (`core` → `oceens` → `src` → repository root), which only lands on the actual clone for an editable install — the one `uv sync` performs by default for this local project. The Docker image instead sets `LOCAL_DATABASE_DIR=/app/database` explicitly, since the package there isn't necessarily reached from a cloned checkout. `templates/`, `static/` and `import/` are resolved the same way but don't need the override: they ship inside the package itself, so `Path(__file__)` always finds them relative to wherever `oceens` is actually installed. `.venv/` (not shown, not committed) is created by `uv sync`.
 
 ---
 
@@ -553,7 +552,7 @@ up and is used for every login on the page; the key is never stored in the
 session. You come back to this page to switch users.
 
 ```bash
-AUTH_MODE=dev DEV_LOGIN_KEY=my-key uvicorn main:app
+AUTH_MODE=dev DEV_LOGIN_KEY=my-key uv run oceens
 
 # Log in as the seed admin; -c saves the session cookie
 curl -i -c cookies.txt \
@@ -631,7 +630,7 @@ allowed domain) and duplicates are rejected.
 - [ ] Database present (`database/db_oceens.db`) or a Docker volume mounted
 - [ ] Environment variables secured, including `LLM_API_KEY`
 - [ ] **Docker Compose**: `.env` loaded via `env_file`, never copied into the image; `LOCAL_DATABASE_DIR` pointing at the right database directory
-- [ ] `summaries_generator_daemon.py` running, if LLM summaries are used
+- [ ] Summaries daemon running (`uv run oceens-summaries-daemon`), if LLM summaries are used
 
 ---
 

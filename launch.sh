@@ -2,30 +2,20 @@
 
 cd /home/mde-admin/OceENS
 
-if [ ! -d venv ]; then 
-	echo "venv not found. Installing"
-	python3 -m venv venv
-	source venv/bin/activate
-	pip install -r requirements.txt
-	deactivate
-fi
+uv sync --frozen
 
-if [ $(ps -aux | grep "main.py" | wc -l) -gt 1 ]; then
+if pgrep -f "bin/oceens$" > /dev/null; then
 	echo "Website already launched"
 else
 
 	echo "Launching Website with screen"
-	screen -d -m bash -c "source venv/bin/activate && python -u main.py 2> >(tee -a app.error) | tee -a app.log"
+	screen -d -m bash -c "uv run oceens 2> >(tee -a app.error) | tee -a app.log"
 fi
 
-if [ $(ps -aux | grep "summaries_generator_daemon.py" | wc -l) -gt 1 ]; then
+if pgrep -f "oceens-summaries-daemon" > /dev/null; then
 	echo "Summaries generator already launched"
 else
 
 	echo "Launching Summaries generator with screen"
-	screen -d -m bash -c "source venv/bin/activate && python -u summaries_generator_daemon.py 2> >(tee -a summaries.error) | tee -a summaries.log"
+	screen -d -m bash -c "uv run oceens-summaries-daemon 2> >(tee -a summaries.error) | tee -a summaries.log"
 fi
-
-
-
-
