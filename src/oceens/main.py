@@ -216,3 +216,4 @@ def run():
 
 if __name__ == "__main__":
     run()
+from oceens.core.auth import _build_msal_app
