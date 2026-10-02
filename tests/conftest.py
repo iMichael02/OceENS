@@ -11,5 +11,11 @@ processus sans credentials Entra : les tests tournent en `AUTH_MODE=dev`.
 import os
 import tempfile
 
+import dotenv
+
+# CI n'a pas de .env : `load_dotenv()` est appelé à l'import de plusieurs
+# modules, et ne doit rien lire sur la machine de celui qui lance les tests.
+dotenv.load_dotenv = lambda *args, **kwargs: False
+
 os.environ["LOCAL_DATABASE_DIR"] = tempfile.mkdtemp(prefix="oceens-tests-")
 os.environ["AUTH_MODE"] = "dev"
