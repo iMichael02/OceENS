@@ -711,6 +711,42 @@ duplicates are refused.
 
 ---
 
+## Deploying on Azure App Service
+
+`.github/workflows/architecture.yml` deploys the default branch to an App Service app, `staging`,
+on one B1 plan in France Central, always on. It signs in through the [dev sign-in](#dev-sign-in),
+with its own `DEV_LOGIN_KEY` and its own `SECRET_KEY`: that is the one exception to the
+[deployment checklist](#deployment-checklist)'s `AUTH_MODE` line.
+
+- **Staging, on green.** A push to the default branch whose `architecture` and `test` jobs
+  both pass is built into one image, tagged with its commit and pushed to GHCR
+  (`ghcr.io/<owner>/oceens:<commit>`, public so that App Service pulls it without credentials),
+  then deployed to staging. The image holds its commit as `REVISION`, which the application sends
+  back in the `X-Revision` header of every response. The deploy passes only once `/dev/login`
+  answers `200` with that commit, so a previous container that is still answering does not count.
+- **Both processes.** The old launcher, `launch.sh`, started `oceens` (the web server) and
+  `oceens-summaries` (the summaries daemon). The image starts `oceens` alone, which starts the
+  daemon itself because the deploy sets `RUN_SUMMARIES_DAEMON=1`.
+
+The GitHub Environment `staging` holds the settings, never a committed file: the variables
+`AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_RESOURCE_GROUP` and
+`AZURE_WEBAPP_NAME`, and the secrets `SECRET_KEY`, `DEV_LOGIN_KEY` and `MISTRAL_API_KEY`. Every
+deploy writes them to the app (`.github/actions/deploy-to-app-service`), with `--output none` so
+that no value reaches the log, along with `AUTH_MODE=dev`, `RUN_SUMMARIES_DAEMON=1` and the
+`DEFAULT_PROVIDER_*` settings that point the LLM at Mistral. The workflow logs in to Azure through
+OpenID Connect, as its GitHub Environment, and stores no Azure password.
+
+### Known limits
+
+- **The data is reset at every deploy and at every restart the platform makes.** The SQLite file
+  lives on the container's own disk: `/home` is a network share on which SQLite cannot take its
+  locks, and the daemon writes the same file as the web server. Each start creates the database
+  and seeds it again ([What the first start does](#what-the-first-start-does)).
+- **Without `SECRET_KEY`, every deploy signs everyone out** ([Dev sign-in](#dev-sign-in)). Each
+  environment sets its own, never another's.
+
+---
+
 ## Validating a change
 
 The automated tests are still few (`uv run pytest`) and there is no CI, so behaviour is
