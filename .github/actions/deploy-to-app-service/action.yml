@@ -1,0 +1,128 @@
+# One deploy, whichever the environment: write that environment's settings on
+# its App Service app, then have the app run the given image. Staging and
+# production both deploy through here, so production is deployed exactly the
+# way staging was, only with its own app and its own secrets.
+#
+# The caller is already logged in to Azure (azure/login), as the GitHub
+# Environment it runs in.
+name: Deploy to App Service
+description: Run one image on one environment's App Service app, with that environment's settings.
+
+inputs:
+  image:
+    description: The image to run, tagged with the commit it was built from.
+    required: true
+  resource-group:
+    description: The resource group holding the app.
+    required: true
+  app-name:
+    description: The environment's App Service app.
+    required: true
+  secret-key:
+    description: The environment's own SECRET_KEY.
+    required: true
+  dev-login-key:
+    description: The environment's own DEV_LOGIN_KEY.
+    required: true
+  mistral-api-key:
+    description: The Mistral key, MISTRAL_API_KEY.
+    required: true
+  provider-base-url:
+    description: DEFAULT_PROVIDER_BASE_URL, the LLM's URL.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    # Written at every deploy, so that the GitHub Environment stays the one
+    # place a setting is changed. --output none: the command would otherwise
+    # print every setting back, secrets included.
+    #
+    # - WEBSITES_PORT: uvicorn listens on 8000, not on the 80 App Service expects.
+    # - WEBSITES_ENABLE_APP_SERVICE_STORAGE=false: the SQLite file stays on the
+    #   container's own disk. App Service's lasting storage, /home, is a network
+    #   share on which SQLite cannot take its locks, and the summaries daemon is
+    #   a second process writing the same file.
+    # - AUTH_MODE=dev: a fork signs in through the dev sign-in, guarded by the
+    #   environment's own DEV_LOGIN_KEY; its cookie is signed by its own SECRET_KEY.
+    # - RUN_SUMMARIES_DAEMON=1: the old launcher (launch.sh) started two
+    #   processes, `oceens` and `oceens-summaries`. The image starts `oceens`
+    #   alone, which starts the daemon itself when this is set.
+    # - DEFAULT_PROVIDER_*: Mistral answers as OpenAI's API does. The key's
+    #   NAME is set, never its value. The seed keeps the row's name.
+    - name: Write this environment's settings
+      shell: bash
+      env:
+        RESOURCE_GROUP: ${{ inputs.resource-group }}
+        APP_NAME: ${{ inputs.app-name }}
+        SECRET_KEY: ${{ inputs.secret-key }}
+        DEV_LOGIN_KEY: ${{ inputs.dev-login-key }}
+        MISTRAL_API_KEY: ${{ inputs.mistral-api-key }}
+        DEFAULT_PROVIDER_BASE_URL: ${{ inputs.provider-base-url }}
+      run: |
+        az webapp config appsettings set \
+          --resource-group "$RESOURCE_GROUP" --name "$APP_NAME" --output none \
+          --settings \
+            WEBSITES_PORT=8000 \
+            WEBSITES_ENABLE_APP_SERVICE_STORAGE=false \
+            AUTH_MODE=dev \
+            RUN_SUMMARIES_DAEMON=1 \
+            DEFAULT_PROVIDER_API_TYPE=openai \
+            "DEFAULT_PROVIDER_BASE_URL=$DEFAULT_PROVIDER_BASE_URL" \
+            DEFAULT_PROVIDER_MODEL=ministral-14b-latest \
+            DEFAULT_PROVIDER_KEY_ENV=MISTRAL_API_KEY \
+            "SECRET_KEY=$SECRET_KEY" \
+            "DEV_LOGIN_KEY=$DEV_LOGIN_KEY" \
+            "MISTRAL_API_KEY=$MISTRAL_API_KEY"
+
+    # The image is public on GHCR, so the app pulls it without credentials.
+    - name: Run the image
+      shell: bash
+      env:
+        RESOURCE_GROUP: ${{ inputs.resource-group }}
+        APP_NAME: ${{ inputs.app-name }}
+        IMAGE: ${{ inputs.image }}
+      run: |
+        az webapp config container set \
+          --resource-group "$RESOURCE_GROUP" --name "$APP_NAME" --output none \
+          --container-image-name "$IMAGE"
+        running=$(az webapp config show --resource-group "$RESOURCE_GROUP" --name "$APP_NAME" --query linuxFxVersion --output tsv)
+        if [ "$running" != "DOCKER|$IMAGE" ]; then
+          echo "$APP_NAME is set to $running, not $IMAGE" >&2
+          exit 1
+        fi
+        echo "$APP_NAME now runs $IMAGE"
+
+    # The app restarts on the new image, but App Service keeps serving the
+    # previous container until the new one has started, or failed to. A 200
+    # alone may come from the previous image, so wait until the image just set
+    # answers: the app sends the commit it was built from in its X-Revision
+    # header, and the image's tag is that commit. A container that does not
+    # start then fails this run, even while the previous one still answers.
+    # Pulling the image is most of the wait, so the limit is generous: 700 s.
+    - name: Wait until the new image answers
+      shell: bash
+      env:
+        APP_NAME: ${{ inputs.app-name }}
+        IMAGE: ${{ inputs.image }}
+      run: |
+        url="https://$APP_NAME.azurewebsites.net/dev/login"
+        revision="${IMAGE##*:}"
+        limit=700
+        start=$(date +%s)
+        attempt=0
+        while true; do
+          attempt=$((attempt + 1))
+          answer=$(curl -s -o /dev/null -w '%{http_code} %header{x-revision}' --max-time 30 "$url" || true)
+          elapsed=$(( $(date +%s) - start ))
+          if [ "$answer" = "200 $revision" ]; then
+            echo "$url answers 200 from $revision, ${elapsed} s after the image was set"
+            exit 0
+          fi
+          echo "Attempt $attempt, ${elapsed} s: $url answered ${answer:-nothing}, waiting for 200 $revision"
+          if [ "$elapsed" -ge "$limit" ]; then
+            echo "$url did not answer 200 from $revision within $limit s" >&2
+            exit 1
+          fi
+          sleep 15
+        done
