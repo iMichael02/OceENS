@@ -11,7 +11,7 @@ _DONE = 200
 
 # Durée typique d'une synthèse : 20 s, mesurée sur `metadata_text` le
 # 25 septembre 2026 (hypothèse B du Design Document, EPF-MDE/OceENS#110).
-TYPICAL_JOB_SECONDS = 20
+TYPICAL_JOB_SECONDS = 21
 
 
 @dataclass(frozen=True)
